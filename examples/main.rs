@@ -1,6 +1,6 @@
 #![allow(unused)]
 use simple_yaml_parser::parse as parse_yaml;
-use simple_yaml_parser::value::parse_with_exit_signal as parse_yaml_expression;
+use simple_yaml_parser::value::parse_advanced as parse_yaml_expression;
 
 // fn main() {
 //   parse_yaml_expression("{ x: 6, y: [a, b] }", |keys, value| {

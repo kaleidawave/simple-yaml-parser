@@ -40,7 +40,7 @@ impl std::fmt::Display for YAMLParseError {
     }
 }
 
-/// If you want to return early (not parse the whole input) use [`parse_with_exit_signal`]
+/// If you want to return early (not parse the whole input) use [`parse_advanced`]
 ///
 /// # Errors
 /// Returns an error if it tries to parse invalid YAML input
@@ -48,14 +48,15 @@ pub fn parse<'a>(
     on: &'a str,
     mut cb: impl for<'b> FnMut(&'b [YAMLKey<'a>], RootYAMLValue<'a>),
 ) -> Result<(), YAMLParseError> {
-    parse_with_exit_signal(
+    parse_advanced::<()>(
         on,
         |k, v| {
             cb(k, v);
-            false
+            None
         },
         &ParseOptions::default(),
     )
+    .map(|_none| ())
 }
 
 /// For `|` and `>` based values
@@ -81,11 +82,11 @@ impl Default for ParseOptions {
 /// # Errors
 /// Returns an error if it tries to parse invalid YAML input
 #[allow(clippy::too_many_lines)]
-pub fn parse_with_exit_signal<'a>(
+pub fn parse_advanced<'a, T>(
     on: &'a str,
-    mut cb: impl for<'b> FnMut(&'b [YAMLKey<'a>], RootYAMLValue<'a>) -> bool,
+    mut cb: impl for<'b> FnMut(&'b [YAMLKey<'a>], RootYAMLValue<'a>) -> Option<T>,
     options: &ParseOptions,
-) -> Result<(), YAMLParseError> {
+) -> Result<Option<T>, YAMLParseError> {
     enum State {
         Skip,
         /// TODO quoted strings
@@ -166,7 +167,7 @@ pub fn parse_with_exit_signal<'a>(
                             start = idx + rest_of_line.len() + '\n'.len_utf8();
                         } else {
                             if !rest_of_line.is_empty() {
-                                let _ = value::parse_with_exit_signal_chars(
+                                let _ = value::parse_advanced_chars(
                                     on,
                                     &mut chars,
                                     &mut key_chain,
@@ -213,7 +214,7 @@ pub fn parse_with_exit_signal<'a>(
                             };
                             start = idx + rest_of_line.len();
                         } else {
-                            let _ = value::parse_with_exit_signal_chars(
+                            let _ = value::parse_advanced_chars(
                                 on,
                                 &mut chars,
                                 &mut key_chain,
@@ -238,7 +239,10 @@ pub fn parse_with_exit_signal<'a>(
                         "false" => RootYAMLValue::Boolean(false),
                         value => RootYAMLValue::String(value),
                     };
-                    cb(&key_chain, value);
+                    let res = cb(&key_chain, value);
+                    if res.is_some() {
+                        return Ok(res);
+                    }
                     key_chain.pop();
                     list_idx += 1;
                     state = State::Skip;
@@ -276,7 +280,10 @@ pub fn parse_with_exit_signal<'a>(
                             collapse,
                             preserve_leading_whitespace,
                         };
-                        cb(&key_chain, RootYAMLValue::MultilineString(multiline_string));
+                        let res = cb(&key_chain, RootYAMLValue::MultilineString(multiline_string));
+                        if res.is_some() {
+                            return Ok(res);
+                        }
                         key_chain.pop();
                         state = State::Skip;
                         indent = 0;
@@ -286,9 +293,9 @@ pub fn parse_with_exit_signal<'a>(
         }
     }
 
-    // TODO left over stuff here
+    // TODO left over stuff can should error here
 
-    Ok(())
+    Ok(None)
 }
 
 pub mod value {
@@ -322,22 +329,22 @@ pub mod value {
 
     /// # Errors
     /// Returns an error if it tries to parse invalid YAML input
-    pub fn parse_with_exit_signal<'a>(
+    pub fn parse_advanced<'a, T>(
         on: &'a str,
-        mut cb: impl for<'b> FnMut(&'b [YAMLKey<'a>], RootYAMLValue<'a>) -> bool,
-    ) -> Result<usize, YAMLParseError> {
+        mut cb: impl for<'b> FnMut(&'b [YAMLKey<'a>], RootYAMLValue<'a>) -> Option<T>,
+    ) -> Result<(usize, Option<T>), YAMLParseError> {
         let mut chars = on.char_indices();
         let mut key_chain = Vec::new();
-        parse_with_exit_signal_chars(on, &mut chars, &mut key_chain, &mut cb)
+        parse_advanced_chars(on, &mut chars, &mut key_chain, &mut cb)
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn parse_with_exit_signal_chars<'a>(
+    pub(crate) fn parse_advanced_chars<'a, T>(
         on: &'a str,
         chars: &mut std::str::CharIndices<'a>,
         key_chain: &mut Vec<YAMLKey<'a>>,
-        cb: &mut impl for<'b> FnMut(&'b [YAMLKey<'a>], RootYAMLValue<'a>) -> bool,
-    ) -> Result<usize, YAMLParseError> {
+        cb: &mut impl for<'b> FnMut(&'b [YAMLKey<'a>], RootYAMLValue<'a>) -> Option<T>,
+    ) -> Result<(usize, Option<T>), YAMLParseError> {
         // Temp fix
         struct Options {
             pub allow_comments: bool,
@@ -432,7 +439,7 @@ pub mod value {
                             State::EndOfValue
                         }
                         '"' => State::StringValue {
-                            start: idx + '"'.len_utf8(),
+                            start: idx + chr.len_utf8(),
                             escaped: false,
                         },
                         c @ ('/' | '#') if options.allow_comments => State::Comment {
@@ -451,11 +458,11 @@ pub mod value {
                 } => {
                     if !*escaped && chr == '"' {
                         let res = cb(key_chain, RootYAMLValue::String(&on[start..idx]));
-                        if res {
-                            return Ok(idx + chr.len_utf8());
+                        if res.is_some() {
+                            return Ok((idx + chr.len_utf8(), res));
                         }
                         if key_chain.len() == current_len {
-                            return Ok(idx + chr.len_utf8());
+                            return Ok((idx + chr.len_utf8(), None));
                         }
                         state = State::EndOfValue;
                     } else if *escaped {
@@ -468,7 +475,7 @@ pub mod value {
                     // TODO '}' count
                     if let '\n' | ']' | ',' | '}' = chr {
                         let parsed = &on[start..idx];
-                        let value: RootYAMLValue = match parsed {
+                        let value: RootYAMLValue = match parsed.trim() {
                             "true" => RootYAMLValue::Boolean(true),
                             "false" => RootYAMLValue::Boolean(false),
                             "null" => RootYAMLValue::Null,
@@ -478,13 +485,13 @@ pub mod value {
                             }
                         };
                         let res = cb(key_chain, value);
-                        if res {
-                            return Ok(idx + chr.len_utf8());
+                        if res.is_some() {
+                            return Ok((idx + chr.len_utf8(), res));
                         }
                         state = State::EndOfValue;
                         end_of_value(idx, chr, &mut state, key_chain, options.allow_comments)?;
                         if key_chain.len() == current_len {
-                            return Ok(idx + chr.len_utf8());
+                            return Ok((idx + chr.len_utf8(), None));
                         }
                     }
                 }
@@ -492,7 +499,7 @@ pub mod value {
                     end_of_value(idx, chr, &mut state, key_chain, options.allow_comments)?;
 
                     if key_chain.len() == current_len {
-                        return Ok(idx + chr.len_utf8());
+                        return Ok((idx + chr.len_utf8(), None));
                     }
                 }
                 // TODO I don't think this exists
@@ -550,7 +557,7 @@ pub mod value {
             }
             State::EndOfValue | State::ExpectingValue => {
                 if !key_chain.is_empty() {
-                    dbg!(&key_chain);
+                    // dbg!(&key_chain);
                     return Err(YAMLParseError {
                         at: on.len(),
                         reason: YAMLParseErrorReason::ExpectedBracket,
@@ -558,7 +565,7 @@ pub mod value {
                 }
             }
             State::InObject => {
-                dbg!("in object");
+                // dbg!("in object");
                 return Err(YAMLParseError {
                     at: on.len(),
                     reason: YAMLParseErrorReason::ExpectedBracket,
@@ -569,7 +576,7 @@ pub mod value {
             }
         }
 
-        Ok(on.len())
+        Ok((on.len(), None))
     }
 
     // TODO always pops from key_chain **unless** we are in an array.
@@ -615,7 +622,7 @@ pub mod value {
                 hash: c == '#',
             };
         } else if !chr.is_whitespace() {
-            dbg!(chr, key_chain);
+            // dbg!(chr, key_chain);
             return Err(YAMLParseError {
                 at: idx,
                 reason: YAMLParseErrorReason::ExpectedEndOfValue,
