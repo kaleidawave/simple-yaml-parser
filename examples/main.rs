@@ -20,13 +20,17 @@ person:
   age: 30
   something:
     x: true
-  address:
+  address  :
     street: 123 Main St
     city: Example City
 places:
   list: ["something", "here"]
   inner:
     x: string
+  jobs:
+    - x: string
+      b:
+        with: 5
   "#
     .trim_start();
 

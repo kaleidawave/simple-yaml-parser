@@ -6,11 +6,23 @@ pub enum YAMLKey<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RootYAMLValue<'a> {
+    // TODO record quoted vs bare?
     String(&'a str),
-    MultilineString(MultilineString<'a>),
+    MultiLineString(MultiLineString<'a>),
     Number(&'a str),
     Boolean(bool),
     Null,
+}
+
+impl RootYAMLValue<'_> {
+    #[must_use]
+    pub fn raw_string_value(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            Self::MultiLineString(mls) => Some(mls.on),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -61,12 +73,12 @@ pub fn parse<'a>(
 
 /// For `|` and `>` based values
 #[derive(Debug, PartialEq, Eq)]
-pub struct MultilineString<'a> {
-    on: &'a str,
-    /// replace new lines with spaces. Done using `>`
-    collapse: bool,
+pub struct MultiLineString<'a> {
+    pub on: &'a str,
+    /// replace new lines with spaces. Done using `>` rather than `|`
+    pub collapse: bool,
     /// with `|+` etc
-    preserve_leading_whitespace: bool,
+    pub preserve_leading_whitespace: bool,
 }
 
 pub struct ParseOptions {
@@ -92,7 +104,7 @@ pub fn parse_advanced<'a, T>(
         /// TODO quoted strings
         Identifier,
         ListItem,
-        MultilineStringValue {
+        MultiLineStringValue {
             collapse: bool,
             preserve_leading_whitespace: bool,
             indent: usize,
@@ -159,7 +171,7 @@ pub fn parse_advanced<'a, T>(
                             _ => None,
                         };
                         if let Some((collapse, preserve_leading_whitespace)) = modifier {
-                            state = State::MultilineStringValue {
+                            state = State::MultiLineStringValue {
                                 collapse,
                                 preserve_leading_whitespace,
                                 indent,
@@ -207,23 +219,25 @@ pub fn parse_advanced<'a, T>(
                             _ => None,
                         };
                         if let Some((collapse, preserve_leading_whitespace)) = modifier {
-                            state = State::MultilineStringValue {
+                            state = State::MultiLineStringValue {
                                 collapse,
                                 preserve_leading_whitespace,
                                 indent,
                             };
                             start = idx + rest_of_line.len();
                         } else {
-                            let _ = value::parse_advanced_chars(
-                                on,
-                                &mut chars,
-                                &mut key_chain,
-                                &mut cb,
-                            );
-                            let _popped = key_chain.pop();
-                            indent = 0;
-                            // dbg!(popped);
-                            // TODO is this correct
+                            if !rest_of_line.is_empty() {
+                                let _ = value::parse_advanced_chars(
+                                    on,
+                                    &mut chars,
+                                    &mut key_chain,
+                                    &mut cb,
+                                );
+                                let _popped = key_chain.pop();
+                                // dbg!(popped);
+                                // TODO is this correct
+                                indent = 0;
+                            }
                             state = State::Skip;
                         }
                     }
@@ -250,7 +264,7 @@ pub fn parse_advanced<'a, T>(
                 }
             }
             // This is not a regular value
-            State::MultilineStringValue {
+            State::MultiLineStringValue {
                 collapse,
                 preserve_leading_whitespace,
                 indent: current_indent,
@@ -275,12 +289,12 @@ pub fn parse_advanced<'a, T>(
                     }
 
                     if !is_empty && upcoming_indent <= current_indent {
-                        let multiline_string = MultilineString {
+                        let multiline_string = MultiLineString {
                             on: &on[start..idx],
                             collapse,
                             preserve_leading_whitespace,
                         };
-                        let res = cb(&key_chain, RootYAMLValue::MultilineString(multiline_string));
+                        let res = cb(&key_chain, RootYAMLValue::MultiLineString(multiline_string));
                         if res.is_some() {
                             return Ok(res);
                         }
@@ -480,8 +494,13 @@ pub mod value {
                             "false" => RootYAMLValue::Boolean(false),
                             "null" => RootYAMLValue::Null,
                             value => {
-                                // TODO number check
-                                RootYAMLValue::String(value)
+                                // TODO better number check
+                                let trimmed = value.trim();
+                                if trimmed.chars().all(|chr| matches!(chr, '0'..='9' | '.')) {
+                                    RootYAMLValue::Number(trimmed)
+                                } else {
+                                    RootYAMLValue::String(value)
+                                }
                             }
                         };
                         let res = cb(key_chain, value);
