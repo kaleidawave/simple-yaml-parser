@@ -14,9 +14,9 @@ pub enum RootYAMLValue<'a> {
     Null,
 }
 
-impl RootYAMLValue<'_> {
+impl<'a> RootYAMLValue<'a> {
     #[must_use]
-    pub fn raw_string_value(&self) -> Option<&str> {
+    pub fn raw_string_value(&self) -> Option<&'a str> {
         match self {
             Self::String(value) => Some(value),
             Self::MultiLineString(mls) => Some(mls.on),
@@ -333,6 +333,7 @@ pub mod value {
         // Smilar to string but without quotes
         LiteralValue {
             start: usize,
+            bracket_count: usize,
         },
         StringValue {
             start: usize,
@@ -370,7 +371,7 @@ pub mod value {
 
         let mut state = State::ExpectingValue;
 
-        let current_len = key_chain.len();
+        let initial_len = key_chain.len();
 
         for (idx, chr) in chars {
             match state {
@@ -463,7 +464,10 @@ pub mod value {
                             hash: c == '#',
                         },
                         chr if chr.is_whitespace() => state,
-                        _ => State::LiteralValue { start: idx },
+                        _ => State::LiteralValue {
+                            start: idx,
+                            bracket_count: 0,
+                        },
                     }
                 }
                 State::StringValue {
@@ -475,7 +479,7 @@ pub mod value {
                         if res.is_some() {
                             return Ok((idx + chr.len_utf8(), res));
                         }
-                        if key_chain.len() == current_len {
+                        if key_chain.len() == initial_len {
                             return Ok((idx + chr.len_utf8(), None));
                         }
                         state = State::EndOfValue;
@@ -485,9 +489,14 @@ pub mod value {
                         *escaped = chr == '\\';
                     }
                 }
-                State::LiteralValue { start } => {
-                    // TODO '}' count
-                    if let '\n' | ']' | ',' | '}' = chr {
+                State::LiteralValue {
+                    start,
+                    ref mut bracket_count,
+                } => {
+                    // TODO check more
+                    let should_break = matches!(chr, '\n' | ',')
+                        || matches!(chr, '}' | ']' if *bracket_count == 0 && key_chain.len() > initial_len);
+                    if should_break {
                         let parsed = &on[start..idx];
                         let value: RootYAMLValue = match parsed.trim() {
                             "true" => RootYAMLValue::Boolean(true),
@@ -509,15 +518,19 @@ pub mod value {
                         }
                         state = State::EndOfValue;
                         end_of_value(idx, chr, &mut state, key_chain, options.allow_comments)?;
-                        if key_chain.len() == current_len {
+                        if key_chain.len() == initial_len {
                             return Ok((idx + chr.len_utf8(), None));
                         }
+                    } else if let '{' | '[' = chr {
+                        *bracket_count += 1;
+                    } else if let '}' | ']' = chr {
+                        *bracket_count -= 1;
                     }
                 }
                 State::EndOfValue => {
                     end_of_value(idx, chr, &mut state, key_chain, options.allow_comments)?;
 
-                    if key_chain.len() == current_len {
+                    if key_chain.len() == initial_len {
                         return Ok((idx + chr.len_utf8(), None));
                     }
                 }
@@ -590,7 +603,7 @@ pub mod value {
                     reason: YAMLParseErrorReason::ExpectedBracket,
                 });
             }
-            State::LiteralValue { start } => {
+            State::LiteralValue { start, .. } => {
                 let _result = cb(key_chain, RootYAMLValue::String(&on[start..]));
             }
         }
