@@ -124,7 +124,7 @@ fn main() {
 // }
 
 fn run_interactive() {
-    use std::io::{stdin, BufRead};
+    use std::io::{BufRead, stdin};
     let stdin = stdin();
     let mut buf = Vec::new();
 

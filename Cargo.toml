@@ -1,7 +1,7 @@
 [package]
 name = "simple-yaml-parser"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 description = "No allocation YAML key value parser with comment support"
 authors = ["Ben <kaleidawave@gmail.com>"]
 license = "MIT"
@@ -9,15 +9,18 @@ keywords = ["yaml", "yml"]
 categories = ["parser-implementations"]
 repository = "https://github.com/kaleidawave/simple-yaml-parser"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-
 [lib]
 path = "lib.rs"
 
 [lints.clippy]
 pedantic = "deny"
 
-[package.metadata.commands]
-spectra = 'spectra check specification.md "./target/debug/examples/parse --rpc --interactive"'
+# [[test]]
+# path = "tests/specification.rs"
+# harness = false
+
+[package.metadata.scripts]
+defaults.file = 'private/corpus/aaa.yaml'
+
+test = 'spectra test specification.md "cargo r --example parse -q -- --rpc --interactive"'
+run = 'cargo r --example parse -- $file'
